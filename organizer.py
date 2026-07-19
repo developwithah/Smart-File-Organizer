@@ -2,48 +2,89 @@ import os
 import shutil
 
 
-def organize_files(folder_path):
+FILE_TYPES = {
+    "Images": [".jpg", ".jpeg", ".png", ".gif", ".bmp", ".webp"],
+    "Documents": [".pdf", ".doc", ".docx", ".txt", ".ppt", ".pptx", ".xls", ".xlsx"],
+    "Videos": [".mp4", ".mkv", ".avi", ".mov"],
+    "Audio": [".mp3", ".wav", ".aac"],
+    "Archives": [".zip", ".rar", ".7z"]
+}
+
+
+def organize_files(folder_path, progress_callback=None):
+    """
+    Organize files into category folders.
+
+    Parameters:
+        folder_path (str)
+        progress_callback (function)
+
+    Returns:
+        int -> Number of files organized
+    """
 
     if not os.path.exists(folder_path):
-        print("Folder not found!")
-        return
+        raise FileNotFoundError("Selected folder does not exist.")
 
-    file_types = {
-        "Images": [".jpg", ".jpeg", ".png", ".gif", ".bmp", ".webp"],
-        "Documents": [".pdf", ".doc", ".docx", ".txt", ".ppt", ".pptx", ".xls", ".xlsx"],
-        "Videos": [".mp4", ".mkv", ".avi", ".mov"],
-        "Audio": [".mp3", ".wav", ".aac"],
-        "Archives": [".zip", ".rar", ".7z"]
-    }
+    # Create category folders
+    for folder in FILE_TYPES:
+        os.makedirs(
+            os.path.join(folder_path, folder),
+            exist_ok=True
+        )
 
-    # Create folders
-    for folder_name in file_types:
+    files = []
 
-        folder = os.path.join(folder_path, folder_name)
+    for item in os.listdir(folder_path):
 
-        if not os.path.exists(folder):
-            os.makedirs(folder)
+        full_path = os.path.join(folder_path, item)
 
-    # Organize files
-    for file in os.listdir(folder_path):
+        if os.path.isfile(full_path):
+            files.append(item)
 
-        source_path = os.path.join(folder_path, file)
+    total_files = len(files)
 
-        if os.path.isdir(source_path):
-            continue
+    moved_files = 0
+
+    if total_files == 0:
+
+        if progress_callback:
+            progress_callback(1, 0)
+
+        return 0
+
+    for index, file in enumerate(files, start=1):
+
+        source = os.path.join(folder_path, file)
 
         _, extension = os.path.splitext(file)
+
         extension = extension.lower()
 
-        for folder_name, extensions in file_types.items():
+        for category, extensions in FILE_TYPES.items():
 
             if extension in extensions:
 
-                destination = os.path.join(folder_path, folder_name, file)
+                destination = os.path.join(
+                    folder_path,
+                    category,
+                    file
+                )
 
                 if not os.path.exists(destination):
-                    shutil.move(source_path, destination)
+
+                    shutil.move(source, destination)
+                    moved_files += 1
 
                 break
 
-    print("Organization Complete!")
+        if progress_callback:
+
+            progress = index / total_files
+
+            progress_callback(
+                progress,
+                moved_files
+            )
+
+    return moved_files
