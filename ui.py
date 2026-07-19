@@ -2,6 +2,13 @@ import customtkinter as ctk
 from tkinter import messagebox
 import threading
 import queue
+import os
+
+try:
+    from tkinterdnd2 import DND_FILES, TkinterDnD
+    DRAG_AND_DROP_AVAILABLE = True
+except ImportError:
+    DRAG_AND_DROP_AVAILABLE = False
 
 from organizer import organize_files
 from config import *
@@ -16,6 +23,7 @@ class SmartFileOrganizerApp:
         self.event_queue = queue.Queue()
         self.worker_thread = None
         self.is_processing = False
+        self.drag_and_drop_enabled = False
 
         self.app.title(APP_TITLE)
         self.app.geometry(WINDOW_SIZE)
@@ -25,6 +33,7 @@ class SmartFileOrganizerApp:
         )
 
         self.create_widgets()
+        self.setup_drag_and_drop()
 
     # ---------------------------------
     # UI
@@ -45,6 +54,16 @@ class SmartFileOrganizerApp:
             placeholder_text="Select a folder..."
         )
         self.folder_entry.pack(pady=15)
+
+        self.drop_area = ctk.CTkLabel(
+            self.app,
+            text="Drag and drop a folder here",
+            width=500,
+            height=50,
+            corner_radius=8,
+            fg_color=("gray80", "gray25")
+        )
+        self.drop_area.pack(pady=(0, 10))
 
         self.browse_button = ctk.CTkButton(
             self.app,
@@ -86,6 +105,74 @@ class SmartFileOrganizerApp:
     # ---------------------------------
     # Functions
     # ---------------------------------
+
+    def setup_drag_and_drop(self):
+        """Enable folder drops when tkinterdnd2 is installed."""
+        if not DRAG_AND_DROP_AVAILABLE:
+            self.show_drag_and_drop_unavailable()
+            return
+
+        try:
+            TkinterDnD.require(self.app)
+            self.drop_area.drop_target_register(DND_FILES)
+            self.drop_area.dnd_bind("<<DropEnter>>", self.on_drag_enter)
+            self.drop_area.dnd_bind("<<DropLeave>>", self.on_drag_leave)
+            self.drop_area.dnd_bind("<<Drop>>", self.handle_folder_drop)
+            self.drag_and_drop_enabled = True
+
+        except Exception:
+            self.show_drag_and_drop_unavailable()
+
+    def show_drag_and_drop_unavailable(self):
+        """Keep the app usable and explain how to enable drag-and-drop."""
+        self.drop_area.configure(
+            text="Drag-and-drop unavailable — Browse still works"
+        )
+        self.app.after(
+            100,
+            lambda: messagebox.showinfo(
+                "Drag-and-Drop Unavailable",
+                "Drag-and-drop needs tkinterdnd2. Install project "
+                "dependencies with:\npython -m pip install -r requirements.txt"
+            )
+        )
+
+    def on_drag_enter(self, event):
+        """Show that the dedicated drop area is ready to receive a folder."""
+        self.drop_area.configure(text="Drop folder here...")
+
+    def on_drag_leave(self, event):
+        """Restore the idle message when a folder leaves the drop area."""
+        if self.drag_and_drop_enabled:
+            self.drop_area.configure(text="Drag and drop a folder here")
+
+    def handle_folder_drop(self, event):
+        """Validate a dropped path and use it as the selected folder."""
+        dropped_paths = self.app.tk.splitlist(event.data)
+
+        if len(dropped_paths) != 1:
+            self.drop_area.configure(text="Please drop one folder at a time.")
+            messagebox.showwarning(
+                "Multiple Items Dropped",
+                "Please drop one folder at a time."
+            )
+            return
+
+        folder = dropped_paths[0]
+
+        if not os.path.isdir(folder):
+            self.drop_area.configure(
+                text="Please drop a folder, not a file."
+            )
+            messagebox.showwarning(
+                "Folder Required",
+                "Please drop a folder, not a file."
+            )
+            return
+
+        self.folder_entry.delete(0, "end")
+        self.folder_entry.insert(0, folder)
+        self.drop_area.configure(text="Folder Ready")
 
     def browse_folder(self):
 
