@@ -11,6 +11,7 @@ except ImportError:
     DRAG_AND_DROP_AVAILABLE = False
 
 from organizer import organize_files
+from undo_manager import UndoManager
 from config import *
 from utils import select_folder, validate_folder
 
@@ -21,6 +22,7 @@ class SmartFileOrganizerApp:
 
         self.app = ctk.CTk()
         self.event_queue = queue.Queue()
+        self.undo_manager = UndoManager()
         self.worker_thread = None
         self.is_processing = False
         self.drag_and_drop_enabled = False
@@ -80,6 +82,15 @@ class SmartFileOrganizerApp:
             width=180
         )
         self.organize_button.pack(pady=15)
+
+        self.undo_button = ctk.CTkButton(
+            self.app,
+            text=UNDO_BUTTON,
+            command=self.run_undo,
+            width=180,
+            state="disabled"
+        )
+        self.undo_button.pack(pady=(0, 15))
 
         self.progress_bar = ctk.CTkProgressBar(
             self.app,
@@ -199,6 +210,17 @@ class SmartFileOrganizerApp:
             }
         )
 
+    def queue_undo_progress_update(self, progress, restored, skipped):
+        """Convert undo progress callbacks into queue events."""
+        self.publish_event(
+            "undo_progress",
+            {
+                "progress": progress,
+                "restored": restored,
+                "skipped": skipped
+            }
+        )
+
     def update_progress(self, progress, count):
 
         self.progress_bar.set(progress)
@@ -213,17 +235,46 @@ class SmartFileOrganizerApp:
 
         self.app.update_idletasks()
 
+    def update_undo_progress(self, progress, restored, skipped):
+        """Update the shared progress area while undo is in progress."""
+        self.progress_bar.set(progress)
+        self.status_label.configure(
+            text=f"Undoing... {int(progress * 100)}%"
+        )
+        self.counter_label.configure(
+            text=f"Files Restored : {restored} | Skipped : {skipped}"
+        )
+        self.app.update_idletasks()
+
     def organize_in_background(self, folder):
         """Run file organization without directly accessing UI widgets."""
         try:
+            self.undo_manager.begin_operation()
             total = organize_files(
                 folder,
-                progress_callback=self.queue_progress_update
+                progress_callback=self.queue_progress_update,
+                move_callback=self.undo_manager.record_move
             )
-            self.publish_event("success", {"total": total})
+            undo_available = self.undo_manager.commit_operation()
+            self.publish_event(
+                "success",
+                {"total": total, "undo_available": undo_available}
+            )
 
         except Exception as error:
+            self.undo_manager.discard_operation()
             self.publish_event("error", {"message": str(error)})
+
+    def undo_in_background(self):
+        """Restore the most recent operation without directly accessing UI."""
+        try:
+            result = self.undo_manager.undo_last_operation(
+                progress_callback=self.queue_undo_progress_update
+            )
+            self.publish_event("undo_success", result)
+
+        except Exception as error:
+            self.publish_event("undo_error", {"message": str(error)})
 
     def process_queue(self):
         """Handle worker events on the main GUI thread."""
@@ -239,6 +290,13 @@ class SmartFileOrganizerApp:
                         payload["count"]
                     )
 
+                elif event_type == "undo_progress":
+                    self.update_undo_progress(
+                        payload["progress"],
+                        payload["restored"],
+                        payload["skipped"]
+                    )
+
                 elif event_type == "success":
                     total = payload["total"]
                     self.progress_bar.set(PROGRESS_END)
@@ -250,11 +308,26 @@ class SmartFileOrganizerApp:
                         "Completed",
                         f"{total} file(s) organized successfully."
                     )
+                    if payload["undo_available"]:
+                        self.undo_button.configure(state="normal")
                     self.finish_processing()
 
                 elif event_type == "error":
                     messagebox.showerror("Error", payload["message"])
                     self.status_label.configure(text="Status : Error")
+                    if self.undo_manager.can_undo():
+                        self.undo_button.configure(state="normal")
+                    self.finish_processing()
+
+                elif event_type == "undo_success":
+                    self.handle_undo_success(payload)
+                    self.finish_processing()
+
+                elif event_type == "undo_error":
+                    messagebox.showerror("Undo Error", payload["message"])
+                    self.status_label.configure(text="Status : Undo Error")
+                    if self.undo_manager.can_undo():
+                        self.undo_button.configure(state="normal")
                     self.finish_processing()
 
                 self.event_queue.task_done()
@@ -270,6 +343,35 @@ class SmartFileOrganizerApp:
         self.is_processing = False
         self.worker_thread = None
         self.organize_button.configure(state="normal")
+
+    def handle_undo_success(self, result):
+        """Show the outcome of an undo operation on the GUI thread."""
+        self.progress_bar.set(PROGRESS_END)
+        self.counter_label.configure(
+            text=(
+                f"Files Restored : {result['restored']} | "
+                f"Skipped : {result['skipped']}"
+            )
+        )
+
+        if result["completed"]:
+            self.status_label.configure(text=STATUS_UNDO_COMPLETE)
+            self.undo_button.configure(state="disabled")
+            messagebox.showinfo(
+                "Undo Completed",
+                f"{result['restored']} file(s) restored successfully."
+            )
+        else:
+            self.status_label.configure(text="Undo completed with skipped files.")
+            self.undo_button.configure(state="normal")
+            messagebox.showwarning(
+                "Undo Partially Completed",
+                (
+                    f"Restored: {result['restored']}\n"
+                    f"Skipped: {result['skipped']}\n\n"
+                    "Resolve the skipped files and try undo again."
+                )
+            )
 
     def run_organizer(self):
 
@@ -288,6 +390,7 @@ class SmartFileOrganizerApp:
 
         self.is_processing = True
         self.organize_button.configure(state="disabled")
+        self.undo_button.configure(state="disabled")
 
         self.progress_bar.set(0)
 
@@ -305,6 +408,23 @@ class SmartFileOrganizerApp:
             target=self.organize_in_background,
             args=(folder,)
         )
+        self.worker_thread.start()
+        self.app.after(100, self.process_queue)
+
+    def run_undo(self):
+        """Start undo in a background worker when a completed operation exists."""
+        if self.is_processing or not self.undo_manager.can_undo():
+            return
+
+        self.is_processing = True
+        self.organize_button.configure(state="disabled")
+        self.undo_button.configure(state="disabled")
+        self.progress_bar.set(PROGRESS_START)
+        self.status_label.configure(text=STATUS_UNDO_WORKING)
+        self.counter_label.configure(text="Files Restored : 0 | Skipped : 0")
+        self.app.update_idletasks()
+
+        self.worker_thread = threading.Thread(target=self.undo_in_background)
         self.worker_thread.start()
         self.app.after(100, self.process_queue)
 

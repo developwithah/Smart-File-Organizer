@@ -11,13 +11,14 @@ FILE_TYPES = {
 }
 
 
-def organize_files(folder_path, progress_callback=None):
+def organize_files(folder_path, progress_callback=None, move_callback=None):
     """
     Organize files into category folders.
 
     Parameters:
         folder_path (str)
         progress_callback (function)
+        move_callback (function)
 
     Returns:
         int -> Number of files organized
@@ -75,6 +76,9 @@ def organize_files(folder_path, progress_callback=None):
 
                     shutil.move(source, destination)
                     moved_files += 1
+
+                    if move_callback:
+                        move_callback(source, destination)
 
                 break
 

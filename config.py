@@ -30,11 +30,17 @@ BROWSE_BUTTON = "Browse Folder"
 
 ORGANIZE_BUTTON = "Organize Files"
 
+UNDO_BUTTON = "Undo Last Operation"
+
 STATUS_READY = "Ready"
 
 STATUS_WORKING = "Organizing files..."
 
 STATUS_COMPLETE = "Completed successfully!"
+
+STATUS_UNDO_WORKING = "Undoing last operation..."
+
+STATUS_UNDO_COMPLETE = "Undo completed successfully!"
 
 # -----------------------------
 # Progress
