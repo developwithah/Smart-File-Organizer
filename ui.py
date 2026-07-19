@@ -1,5 +1,7 @@
 import customtkinter as ctk
 from tkinter import messagebox
+import threading
+import queue
 
 from organizer import organize_files
 from config import *
@@ -11,6 +13,9 @@ class SmartFileOrganizerApp:
     def __init__(self):
 
         self.app = ctk.CTk()
+        self.event_queue = queue.Queue()
+        self.worker_thread = None
+        self.is_processing = False
 
         self.app.title(APP_TITLE)
         self.app.geometry(WINDOW_SIZE)
@@ -90,6 +95,23 @@ class SmartFileOrganizerApp:
             self.folder_entry.delete(0, "end")
             self.folder_entry.insert(0, folder)
 
+    def publish_event(self, event_type, payload=None):
+        """Send a structured event from the worker to the GUI thread."""
+        self.event_queue.put({
+            "type": event_type,
+            "payload": payload or {}
+        })
+
+    def queue_progress_update(self, progress, count):
+        """Convert organizer progress callbacks into queue events."""
+        self.publish_event(
+            "progress",
+            {
+                "progress": progress,
+                "count": count
+            }
+        )
+
     def update_progress(self, progress, count):
 
         self.progress_bar.set(progress)
@@ -104,7 +126,68 @@ class SmartFileOrganizerApp:
 
         self.app.update_idletasks()
 
+    def organize_in_background(self, folder):
+        """Run file organization without directly accessing UI widgets."""
+        try:
+            total = organize_files(
+                folder,
+                progress_callback=self.queue_progress_update
+            )
+            self.publish_event("success", {"total": total})
+
+        except Exception as error:
+            self.publish_event("error", {"message": str(error)})
+
+    def process_queue(self):
+        """Handle worker events on the main GUI thread."""
+        try:
+            while True:
+                event = self.event_queue.get_nowait()
+                event_type = event["type"]
+                payload = event["payload"]
+
+                if event_type == "progress":
+                    self.update_progress(
+                        payload["progress"],
+                        payload["count"]
+                    )
+
+                elif event_type == "success":
+                    total = payload["total"]
+                    self.progress_bar.set(PROGRESS_END)
+                    self.status_label.configure(text=STATUS_COMPLETE)
+                    self.counter_label.configure(
+                        text=f"Files Organized : {total}"
+                    )
+                    messagebox.showinfo(
+                        "Completed",
+                        f"{total} file(s) organized successfully."
+                    )
+                    self.finish_processing()
+
+                elif event_type == "error":
+                    messagebox.showerror("Error", payload["message"])
+                    self.status_label.configure(text="Status : Error")
+                    self.finish_processing()
+
+                self.event_queue.task_done()
+
+        except queue.Empty:
+            pass
+
+        if self.is_processing:
+            self.app.after(100, self.process_queue)
+
+    def finish_processing(self):
+        """Restore controls after the worker reports completion or failure."""
+        self.is_processing = False
+        self.worker_thread = None
+        self.organize_button.configure(state="normal")
+
     def run_organizer(self):
+
+        if self.is_processing:
+            return
 
         folder = self.folder_entry.get().strip()
 
@@ -116,6 +199,7 @@ class SmartFileOrganizerApp:
             )
             return
 
+        self.is_processing = True
         self.organize_button.configure(state="disabled")
 
         self.progress_bar.set(0)
@@ -130,45 +214,12 @@ class SmartFileOrganizerApp:
 
         self.app.update_idletasks()
 
-        try:
-
-            total = organize_files(
-                folder,
-                progress_callback=self.update_progress
-            )
-
-            self.progress_bar.set(PROGRESS_END)
-
-            self.status_label.configure(
-                text=STATUS_COMPLETE
-            )
-
-            self.counter_label.configure(
-                text=f"Files Organized : {total}"
-            )
-
-            messagebox.showinfo(
-                "Completed",
-                f"{total} file(s) organized successfully."
-            )
-
-        except Exception as error:
-
-            messagebox.showerror(
-                "Error",
-                str(error)
-            )
-
-            self.status_label.configure(
-                text="Status : Error"
-
-            )
-
-        finally:
-
-            self.organize_button.configure(
-                state="normal"
-            )
+        self.worker_thread = threading.Thread(
+            target=self.organize_in_background,
+            args=(folder,)
+        )
+        self.worker_thread.start()
+        self.app.after(100, self.process_queue)
 
     def run(self):
         self.app.mainloop()
