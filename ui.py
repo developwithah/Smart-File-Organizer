@@ -3,6 +3,7 @@ from tkinter import Menu, messagebox
 import os
 import platform
 import queue
+import sys
 import threading
 
 try:
@@ -321,7 +322,7 @@ class SmartFileOrganizerApp:
         ).grid(row=0, column=0, sticky="w", padx=CONTENT_PADDING, pady=6)
         ctk.CTkLabel(
             status_bar,
-            text=f"{APP_TITLE} v{APP_VERSION}",
+            text=f"{APP_TITLE} - Version {APP_VERSION}",
             font=STATUS_FONT,
             anchor="e"
         ).grid(row=0, column=1, sticky="e", padx=CONTENT_PADDING, pady=6)
@@ -404,11 +405,20 @@ class SmartFileOrganizerApp:
 
     def configure_application_icon(self):
         """Apply a future optional icon without requiring an asset today."""
-        if not APP_ICON_PATH or not os.path.isfile(APP_ICON_PATH):
+        if not APP_ICON_PATH:
+            return
+
+        application_root = getattr(
+            sys,
+            "_MEIPASS",
+            os.path.dirname(os.path.abspath(__file__))
+        )
+        icon_path = os.path.join(application_root, APP_ICON_PATH)
+        if not os.path.isfile(icon_path):
             return
 
         try:
-            self.app.iconbitmap(APP_ICON_PATH)
+            self.app.iconbitmap(icon_path)
         except Exception:
             pass
 
@@ -453,7 +463,7 @@ class SmartFileOrganizerApp:
         messagebox.showinfo(
             MENU_VERSION_INFORMATION,
             (
-                f"{APP_TITLE} {APP_VERSION}\n"
+                f"{APP_TITLE} - Version {APP_VERSION}\n"
                 f"Python {platform.python_version()}\n"
                 f"CustomTkinter {ctk.__version__}"
             )

@@ -15,7 +15,7 @@ ctk.set_default_color_theme("blue")
 # Window
 # -----------------------------
 APP_TITLE = "Smart File Organizer"
-APP_VERSION = "2.9"
+APP_VERSION = "3.0"
 
 WINDOW_WIDTH = 980
 WINDOW_HEIGHT = 760
@@ -38,7 +38,7 @@ TOOLBAR_BUTTON_WIDTH = 150
 DROP_AREA_HEIGHT = 54
 RESULTS_WINDOW_SIZE = "820x600"
 STATUS_BAR_HEIGHT = 30
-APP_ICON_PATH = None
+APP_ICON_PATH = "assets/smart-file-organizer.ico"
 
 HEADER_COLOR = ("#E8F1FF", "#1B2A41")
 CARD_COLOR = ("#F7F9FC", "#1E293B")

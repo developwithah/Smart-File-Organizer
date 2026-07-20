@@ -1,3 +1,6 @@
 _pycache_/
 *.pyc
 .vscode/
+build/
+dist/
+installer/output/
