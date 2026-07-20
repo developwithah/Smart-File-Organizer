@@ -17,7 +17,7 @@ ctk.set_default_color_theme("blue")
 APP_TITLE = "Smart File Organizer"
 
 WINDOW_WIDTH = 750
-WINDOW_HEIGHT = 520
+WINDOW_HEIGHT = 600
 
 WINDOW_SIZE = f"{WINDOW_WIDTH}x{WINDOW_HEIGHT}"
 
@@ -34,6 +34,8 @@ UNDO_BUTTON = "Undo Last Operation"
 
 DUPLICATE_FINDER_BUTTON = "Find Duplicate Files"
 
+STORAGE_ANALYZER_BUTTON = "Analyze Storage"
+
 STATUS_READY = "Ready"
 
 STATUS_WORKING = "Organizing files..."
@@ -45,6 +47,8 @@ STATUS_UNDO_WORKING = "Undoing last operation..."
 STATUS_UNDO_COMPLETE = "Undo completed successfully!"
 
 STATUS_DUPLICATE_WORKING = "Scanning for duplicate files..."
+
+STATUS_STORAGE_WORKING = "Analyzing storage..."
 
 # -----------------------------
 # Progress

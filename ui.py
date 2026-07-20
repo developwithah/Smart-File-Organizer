@@ -13,6 +13,7 @@ except ImportError:
 from organizer import organize_files
 from undo_manager import UndoManager
 from duplicate_finder import find_duplicate_files
+from storage_analyzer import analyze_storage
 from config import *
 from utils import select_folder, validate_folder
 
@@ -100,6 +101,14 @@ class SmartFileOrganizerApp:
             width=180
         )
         self.find_duplicates_button.pack(pady=(0, 10))
+
+        self.analyze_storage_button = ctk.CTkButton(
+            self.app,
+            text=STORAGE_ANALYZER_BUTTON,
+            command=self.run_storage_analyzer,
+            width=180
+        )
+        self.analyze_storage_button.pack(pady=(0, 10))
 
         self.progress_bar = ctk.CTkProgressBar(
             self.app,
@@ -250,6 +259,18 @@ class SmartFileOrganizerApp:
             }
         )
 
+    def queue_storage_progress_update(self, phase, processed, total, total_size):
+        """Convert storage-analysis progress callbacks into queue events."""
+        self.publish_event(
+            "storage_progress",
+            {
+                "phase": phase,
+                "processed": processed,
+                "total": total,
+                "total_size": total_size
+            }
+        )
+
     def update_progress(self, progress, count):
 
         self.progress_bar.set(progress)
@@ -295,6 +316,28 @@ class SmartFileOrganizerApp:
         )
         self.app.update_idletasks()
 
+    def update_storage_progress(self, payload):
+        """Update the shared progress area while storage is analyzed."""
+        if payload["phase"] == "collecting":
+            self.status_label.configure(text="Finding files to analyze...")
+            self.counter_label.configure(text="Preparing storage analysis...")
+            return
+
+        total = payload["total"]
+        processed = payload["processed"]
+        progress = processed / total if total else PROGRESS_END
+        self.progress_bar.set(progress)
+        self.status_label.configure(
+            text=f"Analyzing storage... {int(progress * 100)}%"
+        )
+        self.counter_label.configure(
+            text=(
+                f"Files Analyzed : {processed} / {total} | "
+                f"Size : {self.format_file_size(payload['total_size'])}"
+            )
+        )
+        self.app.update_idletasks()
+
     def organize_in_background(self, folder):
         """Run file organization without directly accessing UI widgets."""
         try:
@@ -337,6 +380,18 @@ class SmartFileOrganizerApp:
         except Exception as error:
             self.publish_event("duplicate_error", {"message": str(error)})
 
+    def analyze_storage_in_background(self, folder):
+        """Analyze storage without directly accessing UI widgets."""
+        try:
+            result = analyze_storage(
+                folder,
+                progress_callback=self.queue_storage_progress_update
+            )
+            self.publish_event("storage_success", {"result": result})
+
+        except Exception as error:
+            self.publish_event("storage_error", {"message": str(error)})
+
     def process_queue(self):
         """Handle worker events on the main GUI thread."""
         try:
@@ -360,6 +415,9 @@ class SmartFileOrganizerApp:
 
                 elif event_type == "duplicate_progress":
                     self.update_duplicate_progress(payload)
+
+                elif event_type == "storage_progress":
+                    self.update_storage_progress(payload)
 
                 elif event_type == "success":
                     total = payload["total"]
@@ -403,6 +461,15 @@ class SmartFileOrganizerApp:
                     self.status_label.configure(text="Status : Duplicate Scan Error")
                     self.finish_processing()
 
+                elif event_type == "storage_success":
+                    self.handle_storage_success(payload["result"])
+                    self.finish_processing()
+
+                elif event_type == "storage_error":
+                    messagebox.showerror("Storage Analysis Error", payload["message"])
+                    self.status_label.configure(text="Status : Storage Analysis Error")
+                    self.finish_processing()
+
                 self.event_queue.task_done()
 
         except queue.Empty:
@@ -417,6 +484,7 @@ class SmartFileOrganizerApp:
         self.worker_thread = None
         self.organize_button.configure(state="normal")
         self.find_duplicates_button.configure(state="normal")
+        self.analyze_storage_button.configure(state="normal")
         self.undo_button.configure(
             state="normal" if self.undo_manager.can_undo() else "disabled"
         )
@@ -509,6 +577,69 @@ class SmartFileOrganizerApp:
 
         results_text.configure(state="disabled")
 
+    def handle_storage_success(self, result):
+        """Display storage-analysis results after the worker completes."""
+        self.progress_bar.set(PROGRESS_END)
+        self.status_label.configure(text="Storage analysis completed!")
+        self.counter_label.configure(
+            text=f"Total Storage : {self.format_file_size(result.total_size)}"
+        )
+        self.show_storage_results(result)
+
+    def show_storage_results(self, result):
+        """Open a read-only window containing the storage analysis."""
+        results_window = ctk.CTkToplevel(self.app)
+        results_window.title("Storage Analysis")
+        results_window.geometry("800x600")
+
+        results_text = ctk.CTkTextbox(results_window, width=750, height=540)
+        results_text.pack(padx=20, pady=20, fill="both", expand=True)
+        results_text.insert("end", "Storage Analysis\n\n")
+        results_text.insert("end", f"Total files: {result.total_files}\n")
+        results_text.insert("end", f"Total folders: {result.total_folders}\n")
+        results_text.insert(
+            "end",
+            f"Total size: {self.format_file_size(result.total_size)}\n"
+        )
+        results_text.insert("end", f"Skipped files: {result.skipped_files}\n\n")
+
+        results_text.insert("end", "Storage by Category\n")
+        for category in result.categories:
+            percentage = (
+                category.total_size / result.total_size * 100
+                if result.total_size else 0
+            )
+            results_text.insert(
+                "end",
+                (
+                    f"- {category.name}: {category.file_count} files, "
+                    f"{self.format_file_size(category.total_size)} "
+                    f"({percentage:.1f}%)\n"
+                )
+            )
+
+        results_text.insert("end", "\nLargest Files\n")
+        if result.largest_files:
+            for index, item in enumerate(result.largest_files, start=1):
+                results_text.insert(
+                    "end",
+                    f"{index}. {self.format_file_size(item.size)} — {item.path}\n"
+                )
+        else:
+            results_text.insert("end", "No files found.\n")
+
+        results_text.insert("end", "\nLargest Folders\n")
+        if result.largest_folders:
+            for index, item in enumerate(result.largest_folders, start=1):
+                results_text.insert(
+                    "end",
+                    f"{index}. {self.format_file_size(item.size)} — {item.path}\n"
+                )
+        else:
+            results_text.insert("end", "No subfolders found.\n")
+
+        results_text.configure(state="disabled")
+
     @staticmethod
     def format_file_size(file_size):
         """Return a readable file-size string for duplicate results."""
@@ -539,6 +670,7 @@ class SmartFileOrganizerApp:
         self.organize_button.configure(state="disabled")
         self.undo_button.configure(state="disabled")
         self.find_duplicates_button.configure(state="disabled")
+        self.analyze_storage_button.configure(state="disabled")
 
         self.progress_bar.set(0)
 
@@ -568,6 +700,7 @@ class SmartFileOrganizerApp:
         self.organize_button.configure(state="disabled")
         self.undo_button.configure(state="disabled")
         self.find_duplicates_button.configure(state="disabled")
+        self.analyze_storage_button.configure(state="disabled")
         self.progress_bar.set(PROGRESS_START)
         self.status_label.configure(text=STATUS_UNDO_WORKING)
         self.counter_label.configure(text="Files Restored : 0 | Skipped : 0")
@@ -594,6 +727,7 @@ class SmartFileOrganizerApp:
         self.organize_button.configure(state="disabled")
         self.undo_button.configure(state="disabled")
         self.find_duplicates_button.configure(state="disabled")
+        self.analyze_storage_button.configure(state="disabled")
         self.progress_bar.set(PROGRESS_START)
         self.status_label.configure(text=STATUS_DUPLICATE_WORKING)
         self.counter_label.configure(text="Preparing duplicate scan...")
@@ -601,6 +735,36 @@ class SmartFileOrganizerApp:
 
         self.worker_thread = threading.Thread(
             target=self.find_duplicates_in_background,
+            args=(folder,)
+        )
+        self.worker_thread.start()
+        self.app.after(100, self.process_queue)
+
+    def run_storage_analyzer(self):
+        """Start a read-only storage analysis in a background worker."""
+        if self.is_processing:
+            return
+
+        folder = self.folder_entry.get().strip()
+        if not validate_folder(folder):
+            messagebox.showwarning(
+                "Warning",
+                "Please select a folder first."
+            )
+            return
+
+        self.is_processing = True
+        self.organize_button.configure(state="disabled")
+        self.undo_button.configure(state="disabled")
+        self.find_duplicates_button.configure(state="disabled")
+        self.analyze_storage_button.configure(state="disabled")
+        self.progress_bar.set(PROGRESS_START)
+        self.status_label.configure(text=STATUS_STORAGE_WORKING)
+        self.counter_label.configure(text="Preparing storage analysis...")
+        self.app.update_idletasks()
+
+        self.worker_thread = threading.Thread(
+            target=self.analyze_storage_in_background,
             args=(folder,)
         )
         self.worker_thread.start()
