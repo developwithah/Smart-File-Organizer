@@ -1,8 +1,9 @@
 import customtkinter as ctk
-from tkinter import messagebox
-import threading
-import queue
+from tkinter import Menu, messagebox
 import os
+import platform
+import queue
+import threading
 
 try:
     from tkinterdnd2 import DND_FILES, TkinterDnD
@@ -10,18 +11,18 @@ try:
 except ImportError:
     DRAG_AND_DROP_AVAILABLE = False
 
-from organizer import organize_files
-from undo_manager import UndoManager
-from duplicate_finder import find_duplicate_files
-from storage_analyzer import analyze_storage
 from config import *
+from duplicate_finder import find_duplicate_files
+from organizer import organize_files
+from storage_analyzer import analyze_storage
+from undo_manager import UndoManager
 from utils import select_folder, validate_folder
 
 
 class SmartFileOrganizerApp:
+    """Coordinate the UI while keeping file operations in dedicated modules."""
 
     def __init__(self):
-
         self.app = ctk.CTk()
         self.event_queue = queue.Queue()
         self.undo_manager = UndoManager()
@@ -29,114 +30,398 @@ class SmartFileOrganizerApp:
         self.is_processing = False
         self.drag_and_drop_enabled = False
 
+        self.dashboard_folder_var = ctk.StringVar(value="No folder selected")
+        self.dashboard_files_var = ctk.StringVar(value="Not analyzed")
+        self.dashboard_size_var = ctk.StringVar(value="Not analyzed")
+        self.dashboard_duplicates_var = ctk.StringVar(value="Not scanned")
+        self.dashboard_status_var = ctk.StringVar(value=f"● {STATUS_READY_TEXT}")
+
         self.app.title(APP_TITLE)
         self.app.geometry(WINDOW_SIZE)
-        self.app.resizable(
-            WINDOW_RESIZABLE,
-            WINDOW_RESIZABLE
+        self.app.minsize(WINDOW_MIN_WIDTH, WINDOW_MIN_HEIGHT)
+        self.app.resizable(WINDOW_RESIZABLE, WINDOW_RESIZABLE)
+        self.app.grid_columnconfigure(0, weight=1)
+        self.app.grid_rowconfigure(4, weight=1)
+
+        self.create_menu_bar()
+        self.create_widgets()
+        self.setup_keyboard_shortcuts()
+        self.setup_drag_and_drop()
+        self.set_status(STATUS_READY_TEXT, "ready")
+        self.sync_action_states()
+
+    # ---------------------------------
+    # Layout
+    # ---------------------------------
+
+    def create_menu_bar(self):
+        """Create familiar application menus that call existing actions."""
+        self.menu_bar = Menu(self.app)
+        self.file_menu = Menu(self.menu_bar, tearoff=0)
+        self.tools_menu = Menu(self.menu_bar, tearoff=0)
+        self.help_menu = Menu(self.menu_bar, tearoff=0)
+
+        self.file_menu.add_command(
+            label=MENU_OPEN_FOLDER,
+            command=self.browse_folder,
+            accelerator="Ctrl+O"
+        )
+        self.file_menu.add_separator()
+        self.file_menu.add_command(label=MENU_EXIT, command=self.exit_app)
+
+        self.tools_menu.add_command(
+            label=ORGANIZE_BUTTON,
+            command=self.run_organizer
+        )
+        self.tools_menu.add_command(
+            label=UNDO_BUTTON,
+            command=self.run_undo,
+            accelerator="Ctrl+Z"
+        )
+        self.tools_menu.add_command(
+            label=DUPLICATE_FINDER_BUTTON,
+            command=self.run_duplicate_finder,
+            accelerator="Ctrl+D"
+        )
+        self.tools_menu.add_command(
+            label=STORAGE_ANALYZER_BUTTON,
+            command=self.run_storage_analyzer,
+            accelerator="Ctrl+S"
         )
 
-        self.create_widgets()
-        self.setup_drag_and_drop()
+        self.help_menu.add_command(
+            label=MENU_ABOUT,
+            command=self.show_about_dialog,
+            accelerator="F1"
+        )
+        self.help_menu.add_command(
+            label=MENU_VERSION_INFORMATION,
+            command=self.show_version_information
+        )
 
-    # ---------------------------------
-    # UI
-    # ---------------------------------
+        self.menu_bar.add_cascade(label=MENU_FILE, menu=self.file_menu)
+        self.menu_bar.add_cascade(label=MENU_TOOLS, menu=self.tools_menu)
+        self.menu_bar.add_cascade(label=MENU_HELP, menu=self.help_menu)
+        self.app.configure(menu=self.menu_bar)
 
     def create_widgets(self):
-
-        self.title = ctk.CTkLabel(
-            self.app,
-            text=APP_TITLE,
-            font=TITLE_FONT
+        """Build the responsive grid layout and its reusable UI sections."""
+        header = ctk.CTkFrame(self.app, fg_color=HEADER_COLOR)
+        header.grid(
+            row=0,
+            column=0,
+            sticky="ew",
+            padx=CONTENT_PADDING,
+            pady=(CONTENT_PADDING, SECTION_SPACING)
         )
-        self.title.pack(pady=25)
+        header.grid_columnconfigure(0, weight=1)
+        ctk.CTkLabel(header, text=APP_TITLE, font=TITLE_FONT).grid(
+            row=0, column=0, padx=CONTENT_PADDING, pady=(18, 2)
+        )
+        ctk.CTkLabel(
+            header,
+            text="Organize, analyze, and understand your files.",
+            font=SUBTITLE_FONT
+        ).grid(row=1, column=0, padx=CONTENT_PADDING, pady=(0, 18))
+
+        self.create_folder_panel()
+        self.create_dashboard()
+        self.create_action_panel()
+        self.create_progress_panel()
+
+    def create_folder_panel(self):
+        folder_panel = ctk.CTkFrame(self.app)
+        folder_panel.grid(
+            row=1,
+            column=0,
+            sticky="ew",
+            padx=CONTENT_PADDING,
+            pady=(0, SECTION_SPACING)
+        )
+        folder_panel.grid_columnconfigure(0, weight=1)
+
+        ctk.CTkLabel(
+            folder_panel,
+            text="Folder Selection",
+            font=CARD_TITLE_FONT
+        ).grid(row=0, column=0, columnspan=2, sticky="w", padx=16, pady=(14, 6))
 
         self.folder_entry = ctk.CTkEntry(
-            self.app,
-            width=500,
-            placeholder_text="Select a folder..."
+            folder_panel,
+            placeholder_text="Select or drop a folder..."
         )
-        self.folder_entry.pack(pady=15)
-
-        self.drop_area = ctk.CTkLabel(
-            self.app,
-            text="Drag and drop a folder here",
-            width=500,
-            height=50,
-            corner_radius=8,
-            fg_color=("gray80", "gray25")
-        )
-        self.drop_area.pack(pady=(0, 10))
+        self.folder_entry.grid(row=1, column=0, sticky="ew", padx=(16, 8), pady=6)
 
         self.browse_button = ctk.CTkButton(
-            self.app,
+            folder_panel,
             text=BROWSE_BUTTON,
             command=self.browse_folder,
-            width=180
+            width=BUTTON_WIDTH
         )
-        self.browse_button.pack(pady=10)
+        self.browse_button.grid(row=1, column=1, padx=(0, 16), pady=6)
 
-        self.organize_button = ctk.CTkButton(
-            self.app,
-            text=ORGANIZE_BUTTON,
-            command=self.run_organizer,
-            width=180
+        self.drop_area = ctk.CTkLabel(
+            folder_panel,
+            text="Drag and drop a folder here",
+            height=DROP_AREA_HEIGHT,
+            corner_radius=8,
+            fg_color=DROP_AREA_COLOR
         )
-        self.organize_button.pack(pady=15)
+        self.drop_area.grid(
+            row=2,
+            column=0,
+            columnspan=2,
+            sticky="ew",
+            padx=16,
+            pady=(6, 14)
+        )
 
-        self.undo_button = ctk.CTkButton(
-            self.app,
-            text=UNDO_BUTTON,
-            command=self.run_undo,
-            width=180,
-            state="disabled"
+    def create_dashboard(self):
+        dashboard = ctk.CTkFrame(self.app)
+        dashboard.grid(
+            row=2,
+            column=0,
+            sticky="ew",
+            padx=CONTENT_PADDING,
+            pady=(0, SECTION_SPACING)
         )
-        self.undo_button.pack(pady=(0, 15))
+        for column in range(3):
+            dashboard.grid_columnconfigure(column, weight=1, uniform="dashboard")
 
-        self.find_duplicates_button = ctk.CTkButton(
-            self.app,
-            text=DUPLICATE_FINDER_BUTTON,
-            command=self.run_duplicate_finder,
-            width=180
-        )
-        self.find_duplicates_button.pack(pady=(0, 10))
+        ctk.CTkLabel(
+            dashboard,
+            text="Dashboard",
+            font=CARD_TITLE_FONT
+        ).grid(row=0, column=0, columnspan=3, sticky="w", padx=16, pady=(14, 6))
 
-        self.analyze_storage_button = ctk.CTkButton(
-            self.app,
-            text=STORAGE_ANALYZER_BUTTON,
-            command=self.run_storage_analyzer,
-            width=180
+        self.create_dashboard_card(
+            dashboard, "Selected Folder", self.dashboard_folder_var, 1, 0, 3
         )
-        self.analyze_storage_button.pack(pady=(0, 10))
+        self.create_dashboard_card(
+            dashboard, "Total Files", self.dashboard_files_var, 2, 0
+        )
+        self.create_dashboard_card(
+            dashboard, "Total Size", self.dashboard_size_var, 2, 1
+        )
+        self.create_dashboard_card(
+            dashboard, "Duplicate Groups", self.dashboard_duplicates_var, 2, 2
+        )
+        self.status_card = self.create_dashboard_card(
+            dashboard, "Current Status", self.dashboard_status_var, 3, 0, 3
+        )
+        self.status_value_label.configure(text_color=STATUS_COLORS["ready"])
 
-        self.progress_bar = ctk.CTkProgressBar(
-            self.app,
-            width=500
+    def create_dashboard_card(self, parent, title, value, row, column, columnspan=1):
+        card = ctk.CTkFrame(parent, fg_color=CARD_COLOR)
+        card.grid(
+            row=row,
+            column=column,
+            columnspan=columnspan,
+            sticky="nsew",
+            padx=CARD_SPACING,
+            pady=CARD_SPACING
         )
-        self.progress_bar.pack(pady=20)
+        card.grid_columnconfigure(0, weight=1)
+        ctk.CTkLabel(card, text=title, font=CARD_TITLE_FONT).grid(
+            row=0, column=0, sticky="w", padx=14, pady=(10, 2)
+        )
+        value_label = ctk.CTkLabel(
+            card,
+            textvariable=value,
+            font=CARD_VALUE_FONT,
+            anchor="w"
+        )
+        value_label.grid(row=1, column=0, sticky="ew", padx=14, pady=(0, 10))
+
+        if title == "Current Status":
+            self.status_value_label = value_label
+
+        return card
+
+    def create_action_panel(self):
+        actions = ctk.CTkFrame(self.app)
+        actions.grid(
+            row=3,
+            column=0,
+            sticky="ew",
+            padx=CONTENT_PADDING,
+            pady=(0, SECTION_SPACING)
+        )
+        actions.grid_columnconfigure(0, weight=1)
+        actions.grid_columnconfigure(1, weight=1)
+
+        self.organize_button = self.create_action_button(
+            actions, ORGANIZE_BUTTON, self.run_organizer, 0, 0
+        )
+        self.undo_button = self.create_action_button(
+            actions, UNDO_BUTTON, self.run_undo, 0, 1
+        )
+        self.find_duplicates_button = self.create_action_button(
+            actions, DUPLICATE_FINDER_BUTTON, self.run_duplicate_finder, 1, 0
+        )
+        self.analyze_storage_button = self.create_action_button(
+            actions, STORAGE_ANALYZER_BUTTON, self.run_storage_analyzer, 1, 1
+        )
+
+    def create_action_button(self, parent, text, command, row, column):
+        button = ctk.CTkButton(
+            parent,
+            text=text,
+            command=command,
+            width=BUTTON_WIDTH,
+            font=BUTTON_FONT
+        )
+        button.grid(
+            row=row,
+            column=column,
+            sticky="ew",
+            padx=SECTION_SPACING,
+            pady=(SECTION_SPACING if row == 0 else 0, SECTION_SPACING)
+        )
+        return button
+
+    def create_progress_panel(self):
+        progress_panel = ctk.CTkFrame(self.app)
+        progress_panel.grid(
+            row=4,
+            column=0,
+            sticky="new",
+            padx=CONTENT_PADDING,
+            pady=(0, CONTENT_PADDING)
+        )
+        progress_panel.grid_columnconfigure(0, weight=1)
+
+        self.progress_bar = ctk.CTkProgressBar(progress_panel)
+        self.progress_bar.grid(row=0, column=0, sticky="ew", padx=16, pady=(14, 8))
         self.progress_bar.set(PROGRESS_START)
 
         self.status_label = ctk.CTkLabel(
-            self.app,
+            progress_panel,
             text=STATUS_READY,
             font=STATUS_FONT
         )
-        self.status_label.pack()
+        self.status_label.grid(row=1, column=0, sticky="w", padx=16, pady=(0, 2))
 
         self.counter_label = ctk.CTkLabel(
-            self.app,
+            progress_panel,
             text="Files Organized : 0",
             font=TEXT_FONT
         )
-        self.counter_label.pack(pady=10)
+        self.counter_label.grid(row=2, column=0, sticky="w", padx=16, pady=(0, 14))
 
     # ---------------------------------
-    # Functions
+    # Menu, shortcuts, and UI state
+    # ---------------------------------
+
+    def setup_keyboard_shortcuts(self):
+        self.app.bind_all("<Control-o>", self.handle_shortcut(self.browse_folder))
+        self.app.bind_all("<Control-d>", self.handle_shortcut(self.run_duplicate_finder))
+        self.app.bind_all("<Control-s>", self.handle_shortcut(self.run_storage_analyzer))
+        self.app.bind_all("<Control-z>", self.handle_shortcut(self.run_undo))
+        self.app.bind_all("<F1>", self.handle_shortcut(self.show_about_dialog))
+
+    @staticmethod
+    def handle_shortcut(command):
+        def callback(event):
+            command()
+            return "break"
+
+        return callback
+
+    def set_status(self, message, indicator="ready"):
+        """Synchronize the visible status label and dashboard status card."""
+        indicator_text = {
+            "ready": STATUS_READY_TEXT,
+            "processing": STATUS_PROCESSING_TEXT,
+            "storage": STATUS_STORAGE_ANALYZED_TEXT,
+            "duplicates": STATUS_DUPLICATES_FOUND_TEXT,
+            "error": STATUS_ERROR_TEXT
+        }[indicator]
+        self.status_label.configure(text=message)
+        self.dashboard_status_var.set(f"● {indicator_text}")
+        self.status_value_label.configure(text_color=STATUS_COLORS[indicator])
+
+    def set_selected_folder(self, folder):
+        self.folder_entry.delete(0, "end")
+        self.folder_entry.insert(0, folder)
+        self.dashboard_folder_var.set(folder)
+        self.dashboard_files_var.set("Not analyzed")
+        self.dashboard_size_var.set("Not analyzed")
+        self.dashboard_duplicates_var.set("Not scanned")
+
+    def sync_action_states(self):
+        """Keep buttons and menu commands aligned with the current app state."""
+        normal_or_disabled = "disabled" if self.is_processing else "normal"
+        undo_state = (
+            "normal"
+            if not self.is_processing and self.undo_manager.can_undo()
+            else "disabled"
+        )
+
+        self.browse_button.configure(state=normal_or_disabled)
+        self.organize_button.configure(state=normal_or_disabled)
+        self.find_duplicates_button.configure(state=normal_or_disabled)
+        self.analyze_storage_button.configure(state=normal_or_disabled)
+        self.undo_button.configure(state=undo_state)
+
+        self.file_menu.entryconfigure(MENU_OPEN_FOLDER, state=normal_or_disabled)
+        self.tools_menu.entryconfigure(ORGANIZE_BUTTON, state=normal_or_disabled)
+        self.tools_menu.entryconfigure(UNDO_BUTTON, state=undo_state)
+        self.tools_menu.entryconfigure(DUPLICATE_FINDER_BUTTON, state=normal_or_disabled)
+        self.tools_menu.entryconfigure(STORAGE_ANALYZER_BUTTON, state=normal_or_disabled)
+
+    def exit_app(self):
+        if self.is_processing:
+            should_exit = messagebox.askyesno(
+                "Operation in Progress",
+                "A file operation is still running. Exit the application?"
+            )
+            if not should_exit:
+                return
+        self.app.destroy()
+
+    def show_about_dialog(self):
+        about_window = ctk.CTkToplevel(self.app)
+        about_window.title(MENU_ABOUT)
+        about_window.geometry("480x390")
+        about_window.resizable(False, False)
+        about_window.transient(self.app)
+
+        about_text = (
+            f"{APP_TITLE}\n"
+            f"Version {APP_VERSION}\n\n"
+            f"Python: {platform.python_version()}\n"
+            f"CustomTkinter: {ctk.__version__}\n\n"
+            "Features\n"
+            "• File organization by type\n"
+            "• Responsive background processing\n"
+            "• Folder drag and drop\n"
+            "• Undo last operation\n"
+            "• Duplicate file finder\n"
+            "• Storage analyzer"
+        )
+        ctk.CTkLabel(
+            about_window,
+            text=about_text,
+            justify="left",
+            font=TEXT_FONT
+        ).pack(padx=28, pady=28, anchor="w")
+
+    def show_version_information(self):
+        messagebox.showinfo(
+            MENU_VERSION_INFORMATION,
+            (
+                f"{APP_TITLE} {APP_VERSION}\n"
+                f"Python {platform.python_version()}\n"
+                f"CustomTkinter {ctk.__version__}"
+            )
+        )
+
+    # ---------------------------------
+    # Folder selection and drag/drop
     # ---------------------------------
 
     def setup_drag_and_drop(self):
-        """Enable folder drops when tkinterdnd2 is installed."""
         if not DRAG_AND_DROP_AVAILABLE:
             self.show_drag_and_drop_unavailable()
             return
@@ -148,37 +433,33 @@ class SmartFileOrganizerApp:
             self.drop_area.dnd_bind("<<DropLeave>>", self.on_drag_leave)
             self.drop_area.dnd_bind("<<Drop>>", self.handle_folder_drop)
             self.drag_and_drop_enabled = True
-
         except Exception:
             self.show_drag_and_drop_unavailable()
 
     def show_drag_and_drop_unavailable(self):
-        """Keep the app usable and explain how to enable drag-and-drop."""
-        self.drop_area.configure(
-            text="Drag-and-drop unavailable — Browse still works"
-        )
+        self.drop_area.configure(text="Drag-and-drop unavailable - Browse still works")
         self.app.after(
             100,
             lambda: messagebox.showinfo(
                 "Drag-and-Drop Unavailable",
-                "Drag-and-drop needs tkinterdnd2. Install project "
-                "dependencies with:\npython -m pip install -r requirements.txt"
+                "Drag-and-drop needs tkinterdnd2. Install dependencies with:\n"
+                "python -m pip install -r requirements.txt"
             )
         )
 
     def on_drag_enter(self, event):
-        """Show that the dedicated drop area is ready to receive a folder."""
-        self.drop_area.configure(text="Drop folder here...")
+        if not self.is_processing:
+            self.drop_area.configure(text="Drop folder here...")
 
     def on_drag_leave(self, event):
-        """Restore the idle message when a folder leaves the drop area."""
-        if self.drag_and_drop_enabled:
+        if self.drag_and_drop_enabled and not self.is_processing:
             self.drop_area.configure(text="Drag and drop a folder here")
 
     def handle_folder_drop(self, event):
-        """Validate a dropped path and use it as the selected folder."""
-        dropped_paths = self.app.tk.splitlist(event.data)
+        if self.is_processing:
+            return
 
+        dropped_paths = self.app.tk.splitlist(event.data)
         if len(dropped_paths) != 1:
             self.drop_area.configure(text="Please drop one folder at a time.")
             messagebox.showwarning(
@@ -188,66 +469,47 @@ class SmartFileOrganizerApp:
             return
 
         folder = dropped_paths[0]
-
         if not os.path.isdir(folder):
-            self.drop_area.configure(
-                text="Please drop a folder, not a file."
-            )
+            self.drop_area.configure(text="Please drop a folder, not a file.")
             messagebox.showwarning(
                 "Folder Required",
                 "Please drop a folder, not a file."
             )
             return
 
-        self.folder_entry.delete(0, "end")
-        self.folder_entry.insert(0, folder)
+        self.set_selected_folder(folder)
         self.drop_area.configure(text="Folder Ready")
+        self.set_status("Folder ready for an action.", "ready")
 
     def browse_folder(self):
+        if self.is_processing:
+            return
 
         folder = select_folder()
-
         if folder:
-            self.folder_entry.delete(0, "end")
-            self.folder_entry.insert(0, folder)
+            self.set_selected_folder(folder)
+            self.drop_area.configure(text="Folder Ready")
+            self.set_status("Folder ready for an action.", "ready")
+
+    # ---------------------------------
+    # Thread-safe event handling
+    # ---------------------------------
 
     def publish_event(self, event_type, payload=None):
-        """Send a structured event from the worker to the GUI thread."""
-        self.event_queue.put({
-            "type": event_type,
-            "payload": payload or {}
-        })
+        self.event_queue.put({"type": event_type, "payload": payload or {}})
 
     def queue_progress_update(self, progress, count):
-        """Convert organizer progress callbacks into queue events."""
-        self.publish_event(
-            "progress",
-            {
-                "progress": progress,
-                "count": count
-            }
-        )
+        self.publish_event("progress", {"progress": progress, "count": count})
 
     def queue_undo_progress_update(self, progress, restored, skipped):
-        """Convert undo progress callbacks into queue events."""
         self.publish_event(
             "undo_progress",
-            {
-                "progress": progress,
-                "restored": restored,
-                "skipped": skipped
-            }
+            {"progress": progress, "restored": restored, "skipped": skipped}
         )
 
     def queue_duplicate_progress_update(
-        self,
-        phase,
-        processed,
-        total,
-        group_count,
-        duplicate_count
+        self, phase, processed, total, group_count, duplicate_count
     ):
-        """Convert duplicate-scan progress callbacks into queue events."""
         self.publish_event(
             "duplicate_progress",
             {
@@ -260,7 +522,6 @@ class SmartFileOrganizerApp:
         )
 
     def queue_storage_progress_update(self, phase, processed, total, total_size):
-        """Convert storage-analysis progress callbacks into queue events."""
         self.publish_event(
             "storage_progress",
             {
@@ -272,54 +533,38 @@ class SmartFileOrganizerApp:
         )
 
     def update_progress(self, progress, count):
-
         self.progress_bar.set(progress)
-
-        self.status_label.configure(
-            text=f"Organizing... {int(progress*100)}%"
-        )
-
-        self.counter_label.configure(
-            text=f"Files Organized : {count}"
-        )
-
+        self.set_status(f"Organizing files... {int(progress * 100)}%", "processing")
+        self.counter_label.configure(text=f"Files Organized : {count}")
         self.app.update_idletasks()
 
     def update_undo_progress(self, progress, restored, skipped):
-        """Update the shared progress area while undo is in progress."""
         self.progress_bar.set(progress)
-        self.status_label.configure(
-            text=f"Undoing... {int(progress * 100)}%"
-        )
+        self.set_status(f"Undoing... {int(progress * 100)}%", "processing")
         self.counter_label.configure(
             text=f"Files Restored : {restored} | Skipped : {skipped}"
         )
         self.app.update_idletasks()
 
     def update_duplicate_progress(self, payload):
-        """Update the shared progress area while duplicates are scanned."""
         total = payload["total"]
         processed = payload["processed"]
-
         if payload["phase"] == "collecting":
-            self.status_label.configure(text="Finding files to scan...")
+            self.set_status("Finding files to scan...", "processing")
             self.counter_label.configure(text="Preparing duplicate scan...")
             return
 
         progress = processed / total if total else PROGRESS_END
         self.progress_bar.set(progress)
-        self.status_label.configure(
-            text=f"Scanning for duplicates... {int(progress * 100)}%"
+        self.set_status(
+            f"Scanning for duplicates... {int(progress * 100)}%", "processing"
         )
-        self.counter_label.configure(
-            text=f"Files Hashed : {processed} / {total}"
-        )
+        self.counter_label.configure(text=f"Files Hashed : {processed} / {total}")
         self.app.update_idletasks()
 
     def update_storage_progress(self, payload):
-        """Update the shared progress area while storage is analyzed."""
         if payload["phase"] == "collecting":
-            self.status_label.configure(text="Finding files to analyze...")
+            self.set_status("Finding files to analyze...", "processing")
             self.counter_label.configure(text="Preparing storage analysis...")
             return
 
@@ -327,8 +572,8 @@ class SmartFileOrganizerApp:
         processed = payload["processed"]
         progress = processed / total if total else PROGRESS_END
         self.progress_bar.set(progress)
-        self.status_label.configure(
-            text=f"Analyzing storage... {int(progress * 100)}%"
+        self.set_status(
+            f"Analyzing storage... {int(progress * 100)}%", "processing"
         )
         self.counter_label.configure(
             text=(
@@ -338,8 +583,11 @@ class SmartFileOrganizerApp:
         )
         self.app.update_idletasks()
 
+    # ---------------------------------
+    # Background operations
+    # ---------------------------------
+
     def organize_in_background(self, folder):
-        """Run file organization without directly accessing UI widgets."""
         try:
             self.undo_manager.begin_operation()
             total = organize_files(
@@ -347,150 +595,105 @@ class SmartFileOrganizerApp:
                 progress_callback=self.queue_progress_update,
                 move_callback=self.undo_manager.record_move
             )
-            undo_available = self.undo_manager.commit_operation()
             self.publish_event(
                 "success",
-                {"total": total, "undo_available": undo_available}
+                {
+                    "total": total,
+                    "undo_available": self.undo_manager.commit_operation()
+                }
             )
-
         except Exception as error:
             self.undo_manager.discard_operation()
             self.publish_event("error", {"message": str(error)})
 
     def undo_in_background(self):
-        """Restore the most recent operation without directly accessing UI."""
         try:
             result = self.undo_manager.undo_last_operation(
                 progress_callback=self.queue_undo_progress_update
             )
             self.publish_event("undo_success", result)
-
         except Exception as error:
             self.publish_event("undo_error", {"message": str(error)})
 
     def find_duplicates_in_background(self, folder):
-        """Scan for duplicates without directly accessing UI widgets."""
         try:
             result = find_duplicate_files(
                 folder,
                 progress_callback=self.queue_duplicate_progress_update
             )
             self.publish_event("duplicate_success", {"result": result})
-
         except Exception as error:
             self.publish_event("duplicate_error", {"message": str(error)})
 
     def analyze_storage_in_background(self, folder):
-        """Analyze storage without directly accessing UI widgets."""
         try:
             result = analyze_storage(
                 folder,
                 progress_callback=self.queue_storage_progress_update
             )
             self.publish_event("storage_success", {"result": result})
-
         except Exception as error:
             self.publish_event("storage_error", {"message": str(error)})
 
     def process_queue(self):
-        """Handle worker events on the main GUI thread."""
         try:
             while True:
                 event = self.event_queue.get_nowait()
-                event_type = event["type"]
-                payload = event["payload"]
-
-                if event_type == "progress":
-                    self.update_progress(
-                        payload["progress"],
-                        payload["count"]
-                    )
-
-                elif event_type == "undo_progress":
-                    self.update_undo_progress(
-                        payload["progress"],
-                        payload["restored"],
-                        payload["skipped"]
-                    )
-
-                elif event_type == "duplicate_progress":
-                    self.update_duplicate_progress(payload)
-
-                elif event_type == "storage_progress":
-                    self.update_storage_progress(payload)
-
-                elif event_type == "success":
-                    total = payload["total"]
-                    self.progress_bar.set(PROGRESS_END)
-                    self.status_label.configure(text=STATUS_COMPLETE)
-                    self.counter_label.configure(
-                        text=f"Files Organized : {total}"
-                    )
-                    messagebox.showinfo(
-                        "Completed",
-                        f"{total} file(s) organized successfully."
-                    )
-                    if payload["undo_available"]:
-                        self.undo_button.configure(state="normal")
-                    self.finish_processing()
-
-                elif event_type == "error":
-                    messagebox.showerror("Error", payload["message"])
-                    self.status_label.configure(text="Status : Error")
-                    if self.undo_manager.can_undo():
-                        self.undo_button.configure(state="normal")
-                    self.finish_processing()
-
-                elif event_type == "undo_success":
-                    self.handle_undo_success(payload)
-                    self.finish_processing()
-
-                elif event_type == "undo_error":
-                    messagebox.showerror("Undo Error", payload["message"])
-                    self.status_label.configure(text="Status : Undo Error")
-                    if self.undo_manager.can_undo():
-                        self.undo_button.configure(state="normal")
-                    self.finish_processing()
-
-                elif event_type == "duplicate_success":
-                    self.handle_duplicate_success(payload["result"])
-                    self.finish_processing()
-
-                elif event_type == "duplicate_error":
-                    messagebox.showerror("Duplicate Scan Error", payload["message"])
-                    self.status_label.configure(text="Status : Duplicate Scan Error")
-                    self.finish_processing()
-
-                elif event_type == "storage_success":
-                    self.handle_storage_success(payload["result"])
-                    self.finish_processing()
-
-                elif event_type == "storage_error":
-                    messagebox.showerror("Storage Analysis Error", payload["message"])
-                    self.status_label.configure(text="Status : Storage Analysis Error")
-                    self.finish_processing()
-
+                self.handle_event(event["type"], event["payload"])
                 self.event_queue.task_done()
-
         except queue.Empty:
             pass
 
         if self.is_processing:
             self.app.after(100, self.process_queue)
 
+    def handle_event(self, event_type, payload):
+        if event_type == "progress":
+            self.update_progress(payload["progress"], payload["count"])
+        elif event_type == "undo_progress":
+            self.update_undo_progress(
+                payload["progress"], payload["restored"], payload["skipped"]
+            )
+        elif event_type == "duplicate_progress":
+            self.update_duplicate_progress(payload)
+        elif event_type == "storage_progress":
+            self.update_storage_progress(payload)
+        elif event_type == "success":
+            self.handle_organize_success(payload)
+        elif event_type == "error":
+            self.handle_error("Error", payload["message"])
+        elif event_type == "undo_success":
+            self.handle_undo_success(payload)
+        elif event_type == "undo_error":
+            self.handle_error("Undo Error", payload["message"])
+        elif event_type == "duplicate_success":
+            self.handle_duplicate_success(payload["result"])
+        elif event_type == "duplicate_error":
+            self.handle_error("Duplicate Scan Error", payload["message"])
+        elif event_type == "storage_success":
+            self.handle_storage_success(payload["result"])
+        elif event_type == "storage_error":
+            self.handle_error("Storage Analysis Error", payload["message"])
+
     def finish_processing(self):
-        """Restore controls after the worker reports completion or failure."""
         self.is_processing = False
         self.worker_thread = None
-        self.organize_button.configure(state="normal")
-        self.find_duplicates_button.configure(state="normal")
-        self.analyze_storage_button.configure(state="normal")
-        self.undo_button.configure(
-            state="normal" if self.undo_manager.can_undo() else "disabled"
-        )
+        self.sync_action_states()
+
+    def handle_organize_success(self, payload):
+        total = payload["total"]
+        self.progress_bar.set(PROGRESS_END)
+        self.set_status(f"Completed successfully: {total} file(s) organized.", "ready")
+        self.counter_label.configure(text=f"Files Organized : {total}")
+        messagebox.showinfo("Completed", f"{total} file(s) organized successfully.")
+        self.finish_processing()
+
+    def handle_error(self, title, message):
+        messagebox.showerror(title, message)
+        self.set_status(f"{STATUS_ERROR_TEXT}: {message}", "error")
+        self.finish_processing()
 
     def handle_undo_success(self, result):
-        """Show the outcome of an undo operation on the GUI thread."""
         self.progress_bar.set(PROGRESS_END)
         self.counter_label.configure(
             text=(
@@ -498,17 +701,14 @@ class SmartFileOrganizerApp:
                 f"Skipped : {result['skipped']}"
             )
         )
-
         if result["completed"]:
-            self.status_label.configure(text=STATUS_UNDO_COMPLETE)
-            self.undo_button.configure(state="disabled")
+            self.set_status(STATUS_UNDO_COMPLETE, "ready")
             messagebox.showinfo(
                 "Undo Completed",
                 f"{result['restored']} file(s) restored successfully."
             )
         else:
-            self.status_label.configure(text="Undo completed with skipped files.")
-            self.undo_button.configure(state="normal")
+            self.set_status("Undo completed with skipped files.", "error")
             messagebox.showwarning(
                 "Undo Partially Completed",
                 (
@@ -517,54 +717,57 @@ class SmartFileOrganizerApp:
                     "Resolve the skipped files and try undo again."
                 )
             )
+        self.finish_processing()
 
     def handle_duplicate_success(self, result):
-        """Display duplicate-scan results after the worker completes."""
         self.progress_bar.set(PROGRESS_END)
-        self.status_label.configure(text="Duplicate scan completed!")
-        self.counter_label.configure(
-            text=f"Duplicate Groups : {len(result.groups)}"
-        )
+        group_count = len(result.groups)
+        self.dashboard_duplicates_var.set(str(group_count))
+        self.counter_label.configure(text=f"Duplicate Groups : {group_count}")
 
         if result.groups:
+            self.set_status(f"{group_count} duplicate group(s) found.", "duplicates")
             self.show_duplicate_results(result)
         else:
-            messagebox.showinfo(
-                "Duplicate Scan Completed",
-                "No duplicate files were found."
-            )
+            self.set_status("No duplicate files were found.", "ready")
+            messagebox.showinfo("Duplicate Scan Completed", "No duplicate files were found.")
+        self.finish_processing()
+
+    def handle_storage_success(self, result):
+        self.progress_bar.set(PROGRESS_END)
+        self.dashboard_files_var.set(str(result.total_files))
+        self.dashboard_size_var.set(self.format_file_size(result.total_size))
+        self.counter_label.configure(
+            text=f"Total Storage : {self.format_file_size(result.total_size)}"
+        )
+        self.set_status("Storage analysis completed.", "storage")
+        self.show_storage_results(result)
+        self.finish_processing()
+
+    # ---------------------------------
+    # Read-only result dialogs
+    # ---------------------------------
 
     def show_duplicate_results(self, result):
-        """Open a read-only window containing sorted duplicate groups."""
-        results_window = ctk.CTkToplevel(self.app)
-        results_window.title("Duplicate File Results")
-        results_window.geometry("780x520")
-
-        duplicate_files = sum(
-            len(group.file_paths) for group in result.groups
+        results_window, results_text = self.create_results_window(
+            "Duplicate File Results"
         )
+        duplicate_files = sum(len(group.file_paths) for group in result.groups)
         wasted_space = sum(group.wasted_space for group in result.groups)
-
-        summary = ctk.CTkLabel(
-            results_window,
-            text=(
-                f"Duplicate groups: {len(result.groups)} | "
-                f"Duplicate files: {duplicate_files} | "
-                f"Potential recoverable space: "
-                f"{self.format_file_size(wasted_space)}"
-            ),
-            font=TEXT_FONT
+        results_text.insert(
+            "end",
+            (
+                f"Duplicate groups: {len(result.groups)}\n"
+                f"Duplicate files: {duplicate_files}\n"
+                f"Potential recoverable space: {self.format_file_size(wasted_space)}\n\n"
+            )
         )
-        summary.pack(padx=20, pady=(20, 10))
-
-        results_text = ctk.CTkTextbox(results_window, width=730, height=410)
-        results_text.pack(padx=20, pady=(0, 20), fill="both", expand=True)
 
         for index, group in enumerate(result.groups, start=1):
             results_text.insert(
                 "end",
                 (
-                    f"Group {index} — {len(group.file_paths)} files\n"
+                    f"Group {index} - {len(group.file_paths)} files\n"
                     f"SHA-256: {group.file_hash}\n"
                     f"File size: {self.format_file_size(group.file_size)}\n"
                     f"Potential recoverable space: "
@@ -572,34 +775,19 @@ class SmartFileOrganizerApp:
                 )
             )
             for file_path in group.file_paths:
-                results_text.insert("end", f"  • {file_path}\n")
+                results_text.insert("end", f"  - {file_path}\n")
             results_text.insert("end", "\n")
 
         results_text.configure(state="disabled")
-
-    def handle_storage_success(self, result):
-        """Display storage-analysis results after the worker completes."""
-        self.progress_bar.set(PROGRESS_END)
-        self.status_label.configure(text="Storage analysis completed!")
-        self.counter_label.configure(
-            text=f"Total Storage : {self.format_file_size(result.total_size)}"
-        )
-        self.show_storage_results(result)
+        results_window.focus()
 
     def show_storage_results(self, result):
-        """Open a read-only window containing the storage analysis."""
-        results_window = ctk.CTkToplevel(self.app)
-        results_window.title("Storage Analysis")
-        results_window.geometry("800x600")
-
-        results_text = ctk.CTkTextbox(results_window, width=750, height=540)
-        results_text.pack(padx=20, pady=20, fill="both", expand=True)
+        results_window, results_text = self.create_results_window("Storage Analysis")
         results_text.insert("end", "Storage Analysis\n\n")
         results_text.insert("end", f"Total files: {result.total_files}\n")
         results_text.insert("end", f"Total folders: {result.total_folders}\n")
         results_text.insert(
-            "end",
-            f"Total size: {self.format_file_size(result.total_size)}\n"
+            "end", f"Total size: {self.format_file_size(result.total_size)}\n"
         )
         results_text.insert("end", f"Skipped files: {result.skipped_files}\n\n")
 
@@ -618,157 +806,110 @@ class SmartFileOrganizerApp:
                 )
             )
 
-        results_text.insert("end", "\nLargest Files\n")
-        if result.largest_files:
-            for index, item in enumerate(result.largest_files, start=1):
-                results_text.insert(
-                    "end",
-                    f"{index}. {self.format_file_size(item.size)} — {item.path}\n"
-                )
-        else:
-            results_text.insert("end", "No files found.\n")
-
-        results_text.insert("end", "\nLargest Folders\n")
-        if result.largest_folders:
-            for index, item in enumerate(result.largest_folders, start=1):
-                results_text.insert(
-                    "end",
-                    f"{index}. {self.format_file_size(item.size)} — {item.path}\n"
-                )
-        else:
-            results_text.insert("end", "No subfolders found.\n")
-
+        self.insert_storage_items(results_text, "Largest Files", result.largest_files, "No files found.")
+        self.insert_storage_items(
+            results_text, "Largest Folders", result.largest_folders, "No subfolders found."
+        )
         results_text.configure(state="disabled")
+        results_window.focus()
+
+    def create_results_window(self, title):
+        results_window = ctk.CTkToplevel(self.app)
+        results_window.title(title)
+        results_window.geometry(RESULTS_WINDOW_SIZE)
+        results_window.grid_columnconfigure(0, weight=1)
+        results_window.grid_rowconfigure(0, weight=1)
+        results_text = ctk.CTkTextbox(results_window)
+        results_text.grid(
+            row=0,
+            column=0,
+            sticky="nsew",
+            padx=CONTENT_PADDING,
+            pady=CONTENT_PADDING
+        )
+        return results_window, results_text
+
+    def insert_storage_items(self, results_text, heading, items, empty_message):
+        results_text.insert("end", f"\n{heading}\n")
+        if not items:
+            results_text.insert("end", f"{empty_message}\n")
+            return
+        for index, item in enumerate(items, start=1):
+            results_text.insert(
+                "end", f"{index}. {self.format_file_size(item.size)} - {item.path}\n"
+            )
 
     @staticmethod
     def format_file_size(file_size):
-        """Return a readable file-size string for duplicate results."""
         units = ("B", "KB", "MB", "GB", "TB")
         size = float(file_size)
-
         for unit in units:
             if size < 1024 or unit == units[-1]:
                 return f"{size:.1f} {unit}"
             size /= 1024
 
-    def run_organizer(self):
+    # ---------------------------------
+    # Action entry points
+    # ---------------------------------
 
-        if self.is_processing:
-            return
-
-        folder = self.folder_entry.get().strip()
-
-        if not validate_folder(folder):
-
-            messagebox.showwarning(
-                "Warning",
-                "Please select a folder first."
-            )
-            return
-
+    def start_background_operation(self, target, args=()):
         self.is_processing = True
-        self.organize_button.configure(state="disabled")
-        self.undo_button.configure(state="disabled")
-        self.find_duplicates_button.configure(state="disabled")
-        self.analyze_storage_button.configure(state="disabled")
-
-        self.progress_bar.set(0)
-
-        self.status_label.configure(
-            text=STATUS_WORKING
-        )
-
-        self.counter_label.configure(
-            text="Files Organized : 0"
-        )
-
-        self.app.update_idletasks()
-
-        self.worker_thread = threading.Thread(
-            target=self.organize_in_background,
-            args=(folder,)
-        )
+        self.sync_action_states()
+        self.worker_thread = threading.Thread(target=target, args=args)
         self.worker_thread.start()
         self.app.after(100, self.process_queue)
+
+    def selected_folder_or_warn(self):
+        folder = self.folder_entry.get().strip()
+        if validate_folder(folder):
+            return folder
+        messagebox.showwarning("Warning", "Please select a folder first.")
+        return ""
+
+    def run_organizer(self):
+        if self.is_processing:
+            return
+        folder = self.selected_folder_or_warn()
+        if not folder:
+            return
+        self.progress_bar.set(PROGRESS_START)
+        self.set_status(STATUS_WORKING, "processing")
+        self.counter_label.configure(text="Files Organized : 0")
+        self.app.update_idletasks()
+        self.start_background_operation(self.organize_in_background, (folder,))
 
     def run_undo(self):
-        """Start undo in a background worker when a completed operation exists."""
         if self.is_processing or not self.undo_manager.can_undo():
             return
-
-        self.is_processing = True
-        self.organize_button.configure(state="disabled")
-        self.undo_button.configure(state="disabled")
-        self.find_duplicates_button.configure(state="disabled")
-        self.analyze_storage_button.configure(state="disabled")
         self.progress_bar.set(PROGRESS_START)
-        self.status_label.configure(text=STATUS_UNDO_WORKING)
+        self.set_status(STATUS_UNDO_WORKING, "processing")
         self.counter_label.configure(text="Files Restored : 0 | Skipped : 0")
         self.app.update_idletasks()
-
-        self.worker_thread = threading.Thread(target=self.undo_in_background)
-        self.worker_thread.start()
-        self.app.after(100, self.process_queue)
+        self.start_background_operation(self.undo_in_background)
 
     def run_duplicate_finder(self):
-        """Start a read-only duplicate scan in a background worker."""
         if self.is_processing:
             return
-
-        folder = self.folder_entry.get().strip()
-        if not validate_folder(folder):
-            messagebox.showwarning(
-                "Warning",
-                "Please select a folder first."
-            )
+        folder = self.selected_folder_or_warn()
+        if not folder:
             return
-
-        self.is_processing = True
-        self.organize_button.configure(state="disabled")
-        self.undo_button.configure(state="disabled")
-        self.find_duplicates_button.configure(state="disabled")
-        self.analyze_storage_button.configure(state="disabled")
         self.progress_bar.set(PROGRESS_START)
-        self.status_label.configure(text=STATUS_DUPLICATE_WORKING)
+        self.set_status(STATUS_DUPLICATE_WORKING, "processing")
         self.counter_label.configure(text="Preparing duplicate scan...")
         self.app.update_idletasks()
-
-        self.worker_thread = threading.Thread(
-            target=self.find_duplicates_in_background,
-            args=(folder,)
-        )
-        self.worker_thread.start()
-        self.app.after(100, self.process_queue)
+        self.start_background_operation(self.find_duplicates_in_background, (folder,))
 
     def run_storage_analyzer(self):
-        """Start a read-only storage analysis in a background worker."""
         if self.is_processing:
             return
-
-        folder = self.folder_entry.get().strip()
-        if not validate_folder(folder):
-            messagebox.showwarning(
-                "Warning",
-                "Please select a folder first."
-            )
+        folder = self.selected_folder_or_warn()
+        if not folder:
             return
-
-        self.is_processing = True
-        self.organize_button.configure(state="disabled")
-        self.undo_button.configure(state="disabled")
-        self.find_duplicates_button.configure(state="disabled")
-        self.analyze_storage_button.configure(state="disabled")
         self.progress_bar.set(PROGRESS_START)
-        self.status_label.configure(text=STATUS_STORAGE_WORKING)
+        self.set_status(STATUS_STORAGE_WORKING, "processing")
         self.counter_label.configure(text="Preparing storage analysis...")
         self.app.update_idletasks()
-
-        self.worker_thread = threading.Thread(
-            target=self.analyze_storage_in_background,
-            args=(folder,)
-        )
-        self.worker_thread.start()
-        self.app.after(100, self.process_queue)
+        self.start_background_operation(self.analyze_storage_in_background, (folder,))
 
     def run(self):
         self.app.mainloop()
