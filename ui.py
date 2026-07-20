@@ -30,22 +30,24 @@ class SmartFileOrganizerApp:
         self.is_processing = False
         self.drag_and_drop_enabled = False
 
-        self.dashboard_folder_var = ctk.StringVar(value="No folder selected")
+        self.dashboard_folder_var = ctk.StringVar(value=EMPTY_DASHBOARD_FOLDER)
         self.dashboard_files_var = ctk.StringVar(value="Not analyzed")
         self.dashboard_size_var = ctk.StringVar(value="Not analyzed")
         self.dashboard_duplicates_var = ctk.StringVar(value="Not scanned")
         self.dashboard_status_var = ctk.StringVar(value=f"● {STATUS_READY_TEXT}")
+        self.bottom_status_var = ctk.StringVar(value=STATUS_READY_TEXT)
 
         self.app.title(APP_TITLE)
         self.app.geometry(WINDOW_SIZE)
         self.app.minsize(WINDOW_MIN_WIDTH, WINDOW_MIN_HEIGHT)
         self.app.resizable(WINDOW_RESIZABLE, WINDOW_RESIZABLE)
         self.app.grid_columnconfigure(0, weight=1)
-        self.app.grid_rowconfigure(4, weight=1)
+        self.app.grid_rowconfigure(3, weight=1)
 
         self.create_menu_bar()
         self.create_widgets()
         self.setup_keyboard_shortcuts()
+        self.configure_application_icon()
         self.setup_drag_and_drop()
         self.set_status(STATUS_READY_TEXT, "ready")
         self.sync_action_states()
@@ -106,9 +108,11 @@ class SmartFileOrganizerApp:
 
     def create_widgets(self):
         """Build the responsive grid layout and its reusable UI sections."""
+        self.create_toolbar()
+
         header = ctk.CTkFrame(self.app, fg_color=HEADER_COLOR)
         header.grid(
-            row=0,
+            row=1,
             column=0,
             sticky="ew",
             padx=CONTENT_PADDING,
@@ -126,13 +130,53 @@ class SmartFileOrganizerApp:
 
         self.create_folder_panel()
         self.create_dashboard()
-        self.create_action_panel()
         self.create_progress_panel()
+        self.create_status_bar()
+
+    def create_toolbar(self):
+        """Create the primary, icon-labeled action surface below the menu."""
+        toolbar = ctk.CTkFrame(self.app, fg_color=TOOLBAR_COLOR)
+        toolbar.grid(row=0, column=0, sticky="ew", padx=CONTENT_PADDING, pady=(8, 8))
+        for column in range(5):
+            toolbar.grid_columnconfigure(column, weight=1, uniform="toolbar")
+
+        self.browse_button = self.create_toolbar_button(
+            toolbar, TOOLBAR_BROWSE_BUTTON, self.browse_folder, 0
+        )
+        self.organize_button = self.create_toolbar_button(
+            toolbar, TOOLBAR_ORGANIZE_BUTTON, self.run_organizer, 1
+        )
+        self.undo_button = self.create_toolbar_button(
+            toolbar, TOOLBAR_UNDO_BUTTON, self.run_undo, 2
+        )
+        self.find_duplicates_button = self.create_toolbar_button(
+            toolbar, TOOLBAR_DUPLICATE_BUTTON, self.run_duplicate_finder, 3
+        )
+        self.analyze_storage_button = self.create_toolbar_button(
+            toolbar, TOOLBAR_STORAGE_BUTTON, self.run_storage_analyzer, 4
+        )
+
+    def create_toolbar_button(self, parent, text, command, column):
+        button = ctk.CTkButton(
+            parent,
+            text=text,
+            command=command,
+            width=TOOLBAR_BUTTON_WIDTH,
+            font=BUTTON_FONT
+        )
+        button.grid(
+            row=0,
+            column=column,
+            sticky="ew",
+            padx=8,
+            pady=8
+        )
+        return button
 
     def create_folder_panel(self):
         folder_panel = ctk.CTkFrame(self.app)
         folder_panel.grid(
-            row=1,
+            row=2,
             column=0,
             sticky="ew",
             padx=CONTENT_PADDING,
@@ -148,21 +192,14 @@ class SmartFileOrganizerApp:
 
         self.folder_entry = ctk.CTkEntry(
             folder_panel,
-            placeholder_text="Select or drop a folder..."
+            placeholder_text=EMPTY_FOLDER_MESSAGE
         )
-        self.folder_entry.grid(row=1, column=0, sticky="ew", padx=(16, 8), pady=6)
-
-        self.browse_button = ctk.CTkButton(
-            folder_panel,
-            text=BROWSE_BUTTON,
-            command=self.browse_folder,
-            width=BUTTON_WIDTH
-        )
-        self.browse_button.grid(row=1, column=1, padx=(0, 16), pady=6)
+        self.folder_entry.grid(row=1, column=0, sticky="ew", padx=16, pady=6)
+        self.folder_entry.bind("<KeyRelease>", self.on_folder_entry_changed)
 
         self.drop_area = ctk.CTkLabel(
             folder_panel,
-            text="Drag and drop a folder here",
+            text=EMPTY_DROP_MESSAGE,
             height=DROP_AREA_HEIGHT,
             corner_radius=8,
             fg_color=DROP_AREA_COLOR
@@ -170,7 +207,6 @@ class SmartFileOrganizerApp:
         self.drop_area.grid(
             row=2,
             column=0,
-            columnspan=2,
             sticky="ew",
             padx=16,
             pady=(6, 14)
@@ -179,7 +215,7 @@ class SmartFileOrganizerApp:
     def create_dashboard(self):
         dashboard = ctk.CTkFrame(self.app)
         dashboard.grid(
-            row=2,
+            row=3,
             column=0,
             sticky="ew",
             padx=CONTENT_PADDING,
@@ -238,48 +274,6 @@ class SmartFileOrganizerApp:
 
         return card
 
-    def create_action_panel(self):
-        actions = ctk.CTkFrame(self.app)
-        actions.grid(
-            row=3,
-            column=0,
-            sticky="ew",
-            padx=CONTENT_PADDING,
-            pady=(0, SECTION_SPACING)
-        )
-        actions.grid_columnconfigure(0, weight=1)
-        actions.grid_columnconfigure(1, weight=1)
-
-        self.organize_button = self.create_action_button(
-            actions, ORGANIZE_BUTTON, self.run_organizer, 0, 0
-        )
-        self.undo_button = self.create_action_button(
-            actions, UNDO_BUTTON, self.run_undo, 0, 1
-        )
-        self.find_duplicates_button = self.create_action_button(
-            actions, DUPLICATE_FINDER_BUTTON, self.run_duplicate_finder, 1, 0
-        )
-        self.analyze_storage_button = self.create_action_button(
-            actions, STORAGE_ANALYZER_BUTTON, self.run_storage_analyzer, 1, 1
-        )
-
-    def create_action_button(self, parent, text, command, row, column):
-        button = ctk.CTkButton(
-            parent,
-            text=text,
-            command=command,
-            width=BUTTON_WIDTH,
-            font=BUTTON_FONT
-        )
-        button.grid(
-            row=row,
-            column=column,
-            sticky="ew",
-            padx=SECTION_SPACING,
-            pady=(SECTION_SPACING if row == 0 else 0, SECTION_SPACING)
-        )
-        return button
-
     def create_progress_panel(self):
         progress_panel = ctk.CTkFrame(self.app)
         progress_panel.grid(
@@ -308,6 +302,29 @@ class SmartFileOrganizerApp:
             font=TEXT_FONT
         )
         self.counter_label.grid(row=2, column=0, sticky="w", padx=16, pady=(0, 14))
+
+    def create_status_bar(self):
+        """Create a persistent status bar with the current app version."""
+        status_bar = ctk.CTkFrame(
+            self.app,
+            height=STATUS_BAR_HEIGHT,
+            fg_color=STATUS_BAR_COLOR
+        )
+        status_bar.grid(row=5, column=0, sticky="ew")
+        status_bar.grid_columnconfigure(0, weight=1)
+
+        ctk.CTkLabel(
+            status_bar,
+            textvariable=self.bottom_status_var,
+            font=STATUS_FONT,
+            anchor="w"
+        ).grid(row=0, column=0, sticky="w", padx=CONTENT_PADDING, pady=6)
+        ctk.CTkLabel(
+            status_bar,
+            text=f"{APP_TITLE} v{APP_VERSION}",
+            font=STATUS_FONT,
+            anchor="e"
+        ).grid(row=0, column=1, sticky="e", padx=CONTENT_PADDING, pady=6)
 
     # ---------------------------------
     # Menu, shortcuts, and UI state
@@ -338,6 +355,7 @@ class SmartFileOrganizerApp:
             "error": STATUS_ERROR_TEXT
         }[indicator]
         self.status_label.configure(text=message)
+        self.bottom_status_var.set(f"Status: {message}")
         self.dashboard_status_var.set(f"● {indicator_text}")
         self.status_value_label.configure(text_color=STATUS_COLORS[indicator])
 
@@ -348,10 +366,24 @@ class SmartFileOrganizerApp:
         self.dashboard_files_var.set("Not analyzed")
         self.dashboard_size_var.set("Not analyzed")
         self.dashboard_duplicates_var.set("Not scanned")
+        self.sync_action_states()
+
+    def on_folder_entry_changed(self, event):
+        """Keep the empty state and action availability correct for typed paths."""
+        folder = self.folder_entry.get().strip()
+        self.dashboard_folder_var.set(folder or EMPTY_DASHBOARD_FOLDER)
+        self.dashboard_files_var.set("Not analyzed")
+        self.dashboard_size_var.set("Not analyzed")
+        self.dashboard_duplicates_var.set("Not scanned")
+        self.sync_action_states()
 
     def sync_action_states(self):
         """Keep buttons and menu commands aligned with the current app state."""
+        folder_is_selected = bool(self.folder_entry.get().strip())
         normal_or_disabled = "disabled" if self.is_processing else "normal"
+        folder_action_state = (
+            "normal" if folder_is_selected and not self.is_processing else "disabled"
+        )
         undo_state = (
             "normal"
             if not self.is_processing and self.undo_manager.can_undo()
@@ -359,16 +391,26 @@ class SmartFileOrganizerApp:
         )
 
         self.browse_button.configure(state=normal_or_disabled)
-        self.organize_button.configure(state=normal_or_disabled)
-        self.find_duplicates_button.configure(state=normal_or_disabled)
-        self.analyze_storage_button.configure(state=normal_or_disabled)
+        self.organize_button.configure(state=folder_action_state)
+        self.find_duplicates_button.configure(state=folder_action_state)
+        self.analyze_storage_button.configure(state=folder_action_state)
         self.undo_button.configure(state=undo_state)
 
         self.file_menu.entryconfigure(MENU_OPEN_FOLDER, state=normal_or_disabled)
-        self.tools_menu.entryconfigure(ORGANIZE_BUTTON, state=normal_or_disabled)
+        self.tools_menu.entryconfigure(ORGANIZE_BUTTON, state=folder_action_state)
         self.tools_menu.entryconfigure(UNDO_BUTTON, state=undo_state)
-        self.tools_menu.entryconfigure(DUPLICATE_FINDER_BUTTON, state=normal_or_disabled)
-        self.tools_menu.entryconfigure(STORAGE_ANALYZER_BUTTON, state=normal_or_disabled)
+        self.tools_menu.entryconfigure(DUPLICATE_FINDER_BUTTON, state=folder_action_state)
+        self.tools_menu.entryconfigure(STORAGE_ANALYZER_BUTTON, state=folder_action_state)
+
+    def configure_application_icon(self):
+        """Apply a future optional icon without requiring an asset today."""
+        if not APP_ICON_PATH or not os.path.isfile(APP_ICON_PATH):
+            return
+
+        try:
+            self.app.iconbitmap(APP_ICON_PATH)
+        except Exception:
+            pass
 
     def exit_app(self):
         if self.is_processing:

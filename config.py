@@ -15,7 +15,7 @@ ctk.set_default_color_theme("blue")
 # Window
 # -----------------------------
 APP_TITLE = "Smart File Organizer"
-APP_VERSION = "2.8"
+APP_VERSION = "2.9"
 
 WINDOW_WIDTH = 980
 WINDOW_HEIGHT = 760
@@ -34,12 +34,17 @@ CONTENT_PADDING = 24
 SECTION_SPACING = 16
 CARD_SPACING = 12
 BUTTON_WIDTH = 220
+TOOLBAR_BUTTON_WIDTH = 150
 DROP_AREA_HEIGHT = 54
 RESULTS_WINDOW_SIZE = "820x600"
+STATUS_BAR_HEIGHT = 30
+APP_ICON_PATH = None
 
 HEADER_COLOR = ("#E8F1FF", "#1B2A41")
 CARD_COLOR = ("#F7F9FC", "#1E293B")
 DROP_AREA_COLOR = ("#EAF2FF", "#243B55")
+TOOLBAR_COLOR = ("#F7F9FC", "#1E293B")
+STATUS_BAR_COLOR = ("#E8F1FF", "#1B2A41")
 STATUS_COLORS = {
     "ready": ("#16803C", "#4ADE80"),
     "processing": ("#B45309", "#FBBF24"),
@@ -60,6 +65,16 @@ UNDO_BUTTON = "Undo Last Operation"
 DUPLICATE_FINDER_BUTTON = "Find Duplicate Files"
 
 STORAGE_ANALYZER_BUTTON = "Analyze Storage"
+
+TOOLBAR_BROWSE_BUTTON = "📁 Browse"
+TOOLBAR_ORGANIZE_BUTTON = "🗂 Organize"
+TOOLBAR_UNDO_BUTTON = "↶ Undo"
+TOOLBAR_DUPLICATE_BUTTON = "🔍 Duplicates"
+TOOLBAR_STORAGE_BUTTON = "📊 Storage"
+
+EMPTY_FOLDER_MESSAGE = "No folder selected - use Browse or drag a folder here."
+EMPTY_DROP_MESSAGE = "Drag and drop a folder here, or use Browse in the toolbar"
+EMPTY_DASHBOARD_FOLDER = "No folder selected"
 
 MENU_FILE = "File"
 MENU_TOOLS = "Tools"
