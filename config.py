@@ -32,6 +32,8 @@ ORGANIZE_BUTTON = "Organize Files"
 
 UNDO_BUTTON = "Undo Last Operation"
 
+DUPLICATE_FINDER_BUTTON = "Find Duplicate Files"
+
 STATUS_READY = "Ready"
 
 STATUS_WORKING = "Organizing files..."
@@ -41,6 +43,8 @@ STATUS_COMPLETE = "Completed successfully!"
 STATUS_UNDO_WORKING = "Undoing last operation..."
 
 STATUS_UNDO_COMPLETE = "Undo completed successfully!"
+
+STATUS_DUPLICATE_WORKING = "Scanning for duplicate files..."
 
 # -----------------------------
 # Progress

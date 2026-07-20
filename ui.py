@@ -12,6 +12,7 @@ except ImportError:
 
 from organizer import organize_files
 from undo_manager import UndoManager
+from duplicate_finder import find_duplicate_files
 from config import *
 from utils import select_folder, validate_folder
 
@@ -91,6 +92,14 @@ class SmartFileOrganizerApp:
             state="disabled"
         )
         self.undo_button.pack(pady=(0, 15))
+
+        self.find_duplicates_button = ctk.CTkButton(
+            self.app,
+            text=DUPLICATE_FINDER_BUTTON,
+            command=self.run_duplicate_finder,
+            width=180
+        )
+        self.find_duplicates_button.pack(pady=(0, 10))
 
         self.progress_bar = ctk.CTkProgressBar(
             self.app,
@@ -221,6 +230,26 @@ class SmartFileOrganizerApp:
             }
         )
 
+    def queue_duplicate_progress_update(
+        self,
+        phase,
+        processed,
+        total,
+        group_count,
+        duplicate_count
+    ):
+        """Convert duplicate-scan progress callbacks into queue events."""
+        self.publish_event(
+            "duplicate_progress",
+            {
+                "phase": phase,
+                "processed": processed,
+                "total": total,
+                "group_count": group_count,
+                "duplicate_count": duplicate_count
+            }
+        )
+
     def update_progress(self, progress, count):
 
         self.progress_bar.set(progress)
@@ -243,6 +272,26 @@ class SmartFileOrganizerApp:
         )
         self.counter_label.configure(
             text=f"Files Restored : {restored} | Skipped : {skipped}"
+        )
+        self.app.update_idletasks()
+
+    def update_duplicate_progress(self, payload):
+        """Update the shared progress area while duplicates are scanned."""
+        total = payload["total"]
+        processed = payload["processed"]
+
+        if payload["phase"] == "collecting":
+            self.status_label.configure(text="Finding files to scan...")
+            self.counter_label.configure(text="Preparing duplicate scan...")
+            return
+
+        progress = processed / total if total else PROGRESS_END
+        self.progress_bar.set(progress)
+        self.status_label.configure(
+            text=f"Scanning for duplicates... {int(progress * 100)}%"
+        )
+        self.counter_label.configure(
+            text=f"Files Hashed : {processed} / {total}"
         )
         self.app.update_idletasks()
 
@@ -276,6 +325,18 @@ class SmartFileOrganizerApp:
         except Exception as error:
             self.publish_event("undo_error", {"message": str(error)})
 
+    def find_duplicates_in_background(self, folder):
+        """Scan for duplicates without directly accessing UI widgets."""
+        try:
+            result = find_duplicate_files(
+                folder,
+                progress_callback=self.queue_duplicate_progress_update
+            )
+            self.publish_event("duplicate_success", {"result": result})
+
+        except Exception as error:
+            self.publish_event("duplicate_error", {"message": str(error)})
+
     def process_queue(self):
         """Handle worker events on the main GUI thread."""
         try:
@@ -296,6 +357,9 @@ class SmartFileOrganizerApp:
                         payload["restored"],
                         payload["skipped"]
                     )
+
+                elif event_type == "duplicate_progress":
+                    self.update_duplicate_progress(payload)
 
                 elif event_type == "success":
                     total = payload["total"]
@@ -330,6 +394,15 @@ class SmartFileOrganizerApp:
                         self.undo_button.configure(state="normal")
                     self.finish_processing()
 
+                elif event_type == "duplicate_success":
+                    self.handle_duplicate_success(payload["result"])
+                    self.finish_processing()
+
+                elif event_type == "duplicate_error":
+                    messagebox.showerror("Duplicate Scan Error", payload["message"])
+                    self.status_label.configure(text="Status : Duplicate Scan Error")
+                    self.finish_processing()
+
                 self.event_queue.task_done()
 
         except queue.Empty:
@@ -343,6 +416,10 @@ class SmartFileOrganizerApp:
         self.is_processing = False
         self.worker_thread = None
         self.organize_button.configure(state="normal")
+        self.find_duplicates_button.configure(state="normal")
+        self.undo_button.configure(
+            state="normal" if self.undo_manager.can_undo() else "disabled"
+        )
 
     def handle_undo_success(self, result):
         """Show the outcome of an undo operation on the GUI thread."""
@@ -373,6 +450,76 @@ class SmartFileOrganizerApp:
                 )
             )
 
+    def handle_duplicate_success(self, result):
+        """Display duplicate-scan results after the worker completes."""
+        self.progress_bar.set(PROGRESS_END)
+        self.status_label.configure(text="Duplicate scan completed!")
+        self.counter_label.configure(
+            text=f"Duplicate Groups : {len(result.groups)}"
+        )
+
+        if result.groups:
+            self.show_duplicate_results(result)
+        else:
+            messagebox.showinfo(
+                "Duplicate Scan Completed",
+                "No duplicate files were found."
+            )
+
+    def show_duplicate_results(self, result):
+        """Open a read-only window containing sorted duplicate groups."""
+        results_window = ctk.CTkToplevel(self.app)
+        results_window.title("Duplicate File Results")
+        results_window.geometry("780x520")
+
+        duplicate_files = sum(
+            len(group.file_paths) for group in result.groups
+        )
+        wasted_space = sum(group.wasted_space for group in result.groups)
+
+        summary = ctk.CTkLabel(
+            results_window,
+            text=(
+                f"Duplicate groups: {len(result.groups)} | "
+                f"Duplicate files: {duplicate_files} | "
+                f"Potential recoverable space: "
+                f"{self.format_file_size(wasted_space)}"
+            ),
+            font=TEXT_FONT
+        )
+        summary.pack(padx=20, pady=(20, 10))
+
+        results_text = ctk.CTkTextbox(results_window, width=730, height=410)
+        results_text.pack(padx=20, pady=(0, 20), fill="both", expand=True)
+
+        for index, group in enumerate(result.groups, start=1):
+            results_text.insert(
+                "end",
+                (
+                    f"Group {index} — {len(group.file_paths)} files\n"
+                    f"SHA-256: {group.file_hash}\n"
+                    f"File size: {self.format_file_size(group.file_size)}\n"
+                    f"Potential recoverable space: "
+                    f"{self.format_file_size(group.wasted_space)}\n"
+                )
+            )
+            for file_path in group.file_paths:
+                results_text.insert("end", f"  • {file_path}\n")
+            results_text.insert("end", "\n")
+
+        results_text.configure(state="disabled")
+
+    @staticmethod
+    def format_file_size(file_size):
+        """Return a readable file-size string for duplicate results."""
+        units = ("B", "KB", "MB", "GB", "TB")
+        size = float(file_size)
+
+        for unit in units:
+            if size < 1024 or unit == units[-1]:
+                return f"{size:.1f} {unit}"
+            size /= 1024
+
     def run_organizer(self):
 
         if self.is_processing:
@@ -391,6 +538,7 @@ class SmartFileOrganizerApp:
         self.is_processing = True
         self.organize_button.configure(state="disabled")
         self.undo_button.configure(state="disabled")
+        self.find_duplicates_button.configure(state="disabled")
 
         self.progress_bar.set(0)
 
@@ -419,12 +567,42 @@ class SmartFileOrganizerApp:
         self.is_processing = True
         self.organize_button.configure(state="disabled")
         self.undo_button.configure(state="disabled")
+        self.find_duplicates_button.configure(state="disabled")
         self.progress_bar.set(PROGRESS_START)
         self.status_label.configure(text=STATUS_UNDO_WORKING)
         self.counter_label.configure(text="Files Restored : 0 | Skipped : 0")
         self.app.update_idletasks()
 
         self.worker_thread = threading.Thread(target=self.undo_in_background)
+        self.worker_thread.start()
+        self.app.after(100, self.process_queue)
+
+    def run_duplicate_finder(self):
+        """Start a read-only duplicate scan in a background worker."""
+        if self.is_processing:
+            return
+
+        folder = self.folder_entry.get().strip()
+        if not validate_folder(folder):
+            messagebox.showwarning(
+                "Warning",
+                "Please select a folder first."
+            )
+            return
+
+        self.is_processing = True
+        self.organize_button.configure(state="disabled")
+        self.undo_button.configure(state="disabled")
+        self.find_duplicates_button.configure(state="disabled")
+        self.progress_bar.set(PROGRESS_START)
+        self.status_label.configure(text=STATUS_DUPLICATE_WORKING)
+        self.counter_label.configure(text="Preparing duplicate scan...")
+        self.app.update_idletasks()
+
+        self.worker_thread = threading.Thread(
+            target=self.find_duplicates_in_background,
+            args=(folder,)
+        )
         self.worker_thread.start()
         self.app.after(100, self.process_queue)
 
